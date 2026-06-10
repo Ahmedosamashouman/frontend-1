@@ -1,102 +1,102 @@
+import 'dart:async';
 import 'dart:convert';
+
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
+import '../features/community/services/community_supabase.dart';
+import '../models/text_turn_response.dart';
+
 class AiChatService {
-  static const String _apiKey = String.fromEnvironment(
-    'GROQ_API_KEY',
-    defaultValue: '',
+  AiChatService._();
+
+  static const String _baseUrl = String.fromEnvironment(
+    'UPHEAL_API_BASE_URL',
+    defaultValue: 'https://api.upheal.app',
   );
-  static const String _endpoint =
-      "https://api.groq.com/openai/v1/chat/completions";
 
-  static const String systemPrompt = """You are an AI mental health support assistant acting as a warm, empathetic therapist and life coach.
+  static const String _path = '/v1/chat/text-turn';
 
-Core behavior:
-- Use Cognitive Behavioral Therapy (CBT) techniques
-- Validate emotions before giving guidance
-- Keep responses short to medium (3–7 sentences)
-- Be calm, friendly, non-judgmental, and supportive
-- Ask gentle follow-up questions to continue the conversation
-- Speak in a natural, human tone suitable for Gen-Z and Gen-Alpha
+  static Future<TextTurnResponse> sendMessage(
+    String message, {
+    String? sessionId,
+    int limit = 3,
+    String audience = 'adult',
+    double temperature = 0.3,
+    int maxTokens = 220,
+  }) async {
+    final token = _getAccessToken();
 
-CBT techniques to apply:
-- Cognitive reframing
-- Thought awareness
-- Grounding exercises
-- Behavioral activation
-- Stress and anxiety coping strategies
+    final body = <String, dynamic>{
+      'message': message,
+      'limit': limit,
+      'audience': audience,
+      'temperature': temperature,
+      'max_tokens': maxTokens,
+    };
+    if (sessionId != null) body['session_id'] = sessionId;
 
-Memory:
-- Remember important details shared by the user during this conversation
-- Refer back to them naturally when helpful
-
-Safety rules (VERY IMPORTANT):
-- Do NOT diagnose
-- Do NOT give medical or clinical advice
-- If the user expresses suicidal thoughts, self-harm, or crisis:
-  - Respond with empathy
-  - Encourage contacting local emergency services or a trusted person
-  - Suggest reaching out to a mental health professional
-  - Never act as a replacement for professional care
-
-Your goal:
-Help the user feel heard, supported, and gently guided — like a trusted therapist and friend.
-""";
-
-  static Future<String> sendMessage(
-      String userMessage,
-      List<Map<String, String>> history,
-      ) async {
-    if (_apiKey.isEmpty) {
-      throw Exception(
-        'GROQ_API_KEY is not set. '
-            'Build with: flutter run --dart-define=GROQ_API_KEY=<your_key>',
-      );
-    }
+    final headers = <String, String>{
+      'Content-Type': 'application/json',
+    };
+    if (token != null) headers['Authorization'] = 'Bearer $token';
 
     try {
-      final response = await http.post(
-        Uri.parse(_endpoint),
-        headers: {
-          "Authorization": "Bearer $_apiKey",
-          "Content-Type": "application/json",
-        },
-        body: jsonEncode({
-          "model": "llama-3.1-8b-instant",
-          "messages": [
-            {"role": "system", "content": systemPrompt},
-            ...history,
-            {"role": "user", "content": userMessage}
-          ],
-          "temperature": 0.7,
-          "max_tokens": 300
-        }),
-      );
+      final response = await http
+          .post(
+            Uri.parse('$_baseUrl$_path'),
+            headers: headers,
+            body: jsonEncode(body),
+          )
+          .timeout(
+            const Duration(seconds: 45),
+            onTimeout: () => throw TimeoutException(
+              'The coach is taking too long. Please try again.',
+            ),
+          );
 
-      if (response.statusCode != 200) {
-        throw Exception(
-          'AI service error (${response.statusCode}). Please try again.',
-        );
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data is! Map<String, dynamic>) {
+          throw Exception('Unexpected response format from AI service.');
+        }
+        return TextTurnResponse.fromJson(data);
       }
 
-      final data = jsonDecode(response.body);
-      if (data is! Map<String, dynamic>) {
-        throw Exception('Unexpected response format from AI service.');
-      }
-
-      final choices = data['choices'];
-      if (choices == null || choices is! List || choices.isEmpty) {
-        throw Exception('No response received from AI service.');
-      }
-
-      final content = choices[0]?['message']?['content'];
-      if (content == null || content is! String) {
-        throw Exception('Invalid response structure from AI service.');
-      }
-
-      return content;
+      throw _mapError(response.statusCode, response.body);
+    } on TimeoutException {
+      rethrow;
     } on FormatException {
       throw Exception('Failed to parse AI service response.');
+    }
+  }
+
+  static String? _getAccessToken() {
+    final client = CommunitySupabase.clientOrNull;
+    if (client == null) return null;
+    return client.auth.currentSession?.accessToken;
+  }
+
+  static Exception _mapError(int statusCode, String body) {
+    switch (statusCode) {
+      case 401:
+        return Exception('Your session expired. Please sign in again.');
+      case 429:
+        return Exception(
+            'You have sent too many messages. Please wait a moment.');
+      case 502:
+      case 503:
+      case 504:
+        return Exception(
+          'The AI model is waking up. Please try again in a moment.',
+        );
+      default:
+        if (kDebugMode) {
+          debugPrint('[AiChatService] error $statusCode: $body');
+        }
+        return Exception(
+          'Something went wrong ($statusCode). Please try again.',
+        );
     }
   }
 }

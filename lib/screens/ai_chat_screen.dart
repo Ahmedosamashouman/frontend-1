@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons/lucide_icons.dart';
@@ -16,10 +18,11 @@ class _AiChatScreenState extends State<AiChatScreen> {
   final List<Map<String, String>> history = [];
   final ScrollController _scrollController = ScrollController();
   bool loading = false;
+  String? _sessionId;
 
   void send() async {
     if (controller.text.isEmpty) return;
-    
+
     final userMessage = controller.text.trim();
     if (userMessage.isEmpty) return;
 
@@ -29,37 +32,66 @@ class _AiChatScreenState extends State<AiChatScreen> {
       controller.clear();
     });
 
-    // Scroll to bottom after adding user message
     _scrollToBottom();
 
     try {
-      final reply = await AiChatService.sendMessage(
+      final response = await AiChatService.sendMessage(
         userMessage,
-        history.where((msg) => msg["role"] != "system").toList(),
+        sessionId: _sessionId,
       );
 
+      if (_sessionId == null && response.sessionId != null) {
+        _sessionId = response.sessionId;
+      }
+
       setState(() {
-        history.add({"role": "assistant", "content": reply});
+        history.add({"role": "assistant", "content": response.answer});
         loading = false;
       });
 
-      // Scroll to bottom after receiving reply
       _scrollToBottom();
+    } on TimeoutException catch (e) {
+      setState(() => loading = false);
+      if (mounted) _showError(e.message ?? 'The request timed out.');
     } catch (e) {
-      setState(() {
-        loading = false;
-      });
-      
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error: ${e.toString()}'),
-            backgroundColor: AppColors.error,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
+      setState(() => loading = false);
+      if (mounted) _showError(_friendlyError(e));
     }
+  }
+
+  String _friendlyError(dynamic e) {
+    final msg = e.toString();
+    final prefix = 'Exception: ';
+    final text = msg.startsWith(prefix) ? msg.substring(prefix.length) : msg;
+
+    if (text.contains('waking up') ||
+        text.contains('503') ||
+        text.contains('502') ||
+        text.contains('504')) {
+      return 'The AI model is waking up. Please try again in a moment.';
+    }
+    if (text.contains('sign in') || text.contains('401')) {
+      return 'Your session expired. Please sign in again.';
+    }
+    if (text.contains('too long') || text.contains('timed out')) {
+      return 'The coach is taking too long. Please try again.';
+    }
+    if (text.contains('too many') || text.contains('429')) {
+      return 'You have sent too many messages. Please wait a moment.';
+    }
+    return text.isNotEmpty && text.length < 100
+        ? text
+        : 'Something went wrong. Please try again.';
+  }
+
+  void _showError(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: AppColors.error,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
   }
 
   void _scrollToBottom() {
@@ -133,7 +165,8 @@ class _AiChatScreenState extends State<AiChatScreen> {
                           style: GoogleFonts.inter(
                             fontSize: 24,
                             fontWeight: FontWeight.bold,
-                            color: isDark ? Colors.white : AppColors.textPrimary,
+                            color:
+                                isDark ? Colors.white : AppColors.textPrimary,
                           ),
                         ),
                         const SizedBox(height: 8),
@@ -223,7 +256,10 @@ class _AiChatScreenState extends State<AiChatScreen> {
                                 decoration: BoxDecoration(
                                   borderRadius: BorderRadius.circular(16),
                                   gradient: const LinearGradient(
-                                    colors: [Color(0xFF4CAF50), Color(0xFF8BC34A)],
+                                    colors: [
+                                      Color(0xFF4CAF50),
+                                      Color(0xFF8BC34A)
+                                    ],
                                   ),
                                 ),
                                 child: const Icon(
@@ -253,8 +289,10 @@ class _AiChatScreenState extends State<AiChatScreen> {
                                                 Colors.white.withOpacity(0.05),
                                               ]
                                             : [
-                                                AppColors.textPrimary.withOpacity(0.05),
-                                                AppColors.textPrimary.withOpacity(0.02),
+                                                AppColors.textPrimary
+                                                    .withOpacity(0.05),
+                                                AppColors.textPrimary
+                                                    .withOpacity(0.02),
                                               ],
                                   ),
                                   border: Border.all(
@@ -262,7 +300,8 @@ class _AiChatScreenState extends State<AiChatScreen> {
                                         ? const Color(0xFF7C3AED)
                                         : isDark
                                             ? Colors.white.withOpacity(0.2)
-                                            : AppColors.textPrimary.withOpacity(0.1),
+                                            : AppColors.textPrimary
+                                                .withOpacity(0.1),
                                     width: 1,
                                   ),
                                 ),
@@ -287,7 +326,10 @@ class _AiChatScreenState extends State<AiChatScreen> {
                                 decoration: BoxDecoration(
                                   borderRadius: BorderRadius.circular(16),
                                   gradient: const LinearGradient(
-                                    colors: [Color(0xFF7C3AED), Color(0xFF9333EA)],
+                                    colors: [
+                                      Color(0xFF7C3AED),
+                                      Color(0xFF9333EA)
+                                    ],
                                   ),
                                 ),
                                 child: const Icon(
@@ -395,7 +437,9 @@ class _AiChatScreenState extends State<AiChatScreen> {
                     child: IconButton(
                       icon: Icon(
                         LucideIcons.mic,
-                        color: isDark ? Colors.white.withOpacity(0.75) : AppColors.textSecondary,
+                        color: isDark
+                            ? Colors.white.withOpacity(0.75)
+                            : AppColors.textSecondary,
                         size: 20,
                       ),
                       onPressed: null,
@@ -419,7 +463,8 @@ class _AiChatScreenState extends State<AiChatScreen> {
                               height: 20,
                               child: CircularProgressIndicator(
                                 strokeWidth: 2,
-                                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                valueColor:
+                                    AlwaysStoppedAnimation<Color>(Colors.white),
                               ),
                             )
                           : const Icon(
